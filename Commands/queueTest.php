@@ -4,8 +4,8 @@ namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
 use DB;
-use \Curl\Curl;
 use App\Jobs\QueueJob;
+
 
 class QueueTest extends Command
 {
@@ -35,7 +35,7 @@ class QueueTest extends Command
 
     protected $min;
 
-
+    protected $retry = 0;
     /**
      * Create a new command instance.
      *
@@ -54,76 +54,32 @@ class QueueTest extends Command
      */
     public function handle()
     {
-        if (!$this->date && !$this->start_num && !$this->end_num) {    //避免需要重複輸入
-            $this->date = $this->ask('請輸入要查詢的日期("YYYY-MM-DD")');
-            
-            $this->verifyDate($this->date);
-
-            $this->start_num = $this->ask('請輸入起始筆數("0或萬為單位，最多90000")');
-
-            $this->end_num = $this->ask('請輸入最終筆數("以萬為單位，最多100000")');
-
-            $this->verifyNum($this->start_num,$this->end_num);
-
-            $this->time = $this->ask('請輸入查詢時間("HH:mm 24小時制")');
-
-            $this->verifyTime($this->time);
-
-            $this->hour = substr($this->time,0,2);
-
-            $this->min = substr($this->time,3,2);
-        }
-
-        $curl = new Curl();
-
-        $url = "http://train.rd6/?start={$this->date}T{$this->hour}:{$this->min}:00&end={$this->date}T{$this->hour}:{$this->min}:59&from={$this->start_num}";
-        echo $url. "\n";
-
-        if ($curl->error) {   //如果發生錯誤會在重試3次 如果都失敗會把網址記到log裡
-            echo 'Error: ' . $curl->errorCode . ': ' . $curl->errorMessage . "\n";
-            while ($curl->error && $this->retry < 4) {
-                $this->retry ++;
-                echo $this->retry;
-                $curl->get($url);
-            }
-            if ($curl->error && $this->retry == 3){
-                Log::warning("遺漏的單:{$url}");
-                die();
-            }
-        }
+        $this->date = $this->ask('請輸入要查詢的日期("YYYY-MM-DD")');
         
-        echo 'Response:' . "\n";
-        echo "起始筆數: {$this->startNum} \n";
+        $this->verifyDate($this->date);
 
-        $data = json_decode($curl->response,true);
+        $this->start_num = $this->ask('請輸入起始筆數("0或萬為單位，最多90000")');
 
-        $array_key = array_keys($data);   //回傳error或沒資料時停止
-        if ($array_key[0] == "error" || $data['hits']['total']['value'] == 0) {
-            $this->error('發生錯誤或無資料!');
-            die();
+        $this->end_num = $this->ask('請輸入最終筆數("以萬為單位，最多100000")');
+
+        $this->verifyNum($this->start_num,$this->end_num);
+
+        $this->time = $this->ask('請輸入查詢時間("HH:mm 24小時制")');
+
+        $this->verifyTime($this->time);
+
+        $this->hour = substr($this->time,0,2);
+
+        $this->min = substr($this->time,3,2);
+
+        $i = 0;
+
+        for ($num = $this->start_num; $num < $this->end_num; $num += 10000) {
+            $urls[$i]="http://train.rd6/?start={$this->date}T{$this->hour}:{$this->min}:00&end={$this->date}T{$this->hour}:{$this->min}:59&from={$num}";
+            $i++;
         }
 
-        foreach($data['hits']['hits'] as $i => $value){
-            $data['hits']['hits'][$i]['_source'] = stripcslashes(json_encode($value['_source']));
-            $data['hits']['hits'][$i]['sort'] = stripcslashes(json_encode($value['sort']));
-        }
-
-        $arrayLength = count($data['hits']['hits']);
-        echo "資料量: $arrayLength \n";
-        
-        $items = array_chunk($data['hits']['hits'],1000);
-        foreach($items as $item){
-            QueueJob::dispatch($item);
-        }
-        
-        $curl->close();
-
-        if($this->start_num == ($this->end_num-10000)){  //到最終筆數時停止
-            die();
-        }
-
-        $this->start_num += 10000;
-        $this->call('command:queueTest');
+        QueueJob::dispatch($urls);
     }
 
     protected function verifyDate($date)  
